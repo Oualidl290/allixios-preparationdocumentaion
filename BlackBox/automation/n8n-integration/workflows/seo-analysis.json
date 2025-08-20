@@ -1,0 +1,141 @@
+{
+  "name": "SEO Analysis and Optimization",
+  "nodes": [
+    {
+      "id": "schedule-trigger",
+      "name": "SEO Analysis Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [100, 300],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "get-articles",
+      "name": "Get Articles for Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [300, 300],
+      "parameters": {
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/rpc/get_articles_for_seo_analysis",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env.SUPABASE_SERVICE_ROLE_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "p_limit",
+              "value": "50"
+            },
+            {
+              "name": "p_hours_since_last_analysis",
+              "value": "24"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "analyze-seo",
+      "name": "Analyze SEO Metrics",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [500, 300],
+      "parameters": {
+        "functionCode": "// SEO Analysis Function\nconst articles = $json.articles || [];\nconst results = [];\n\nfor (const article of articles) {\n  const seoScore = calculateSEOScore(article);\n  const recommendations = generateRecommendations(article, seoScore);\n  \n  results.push({\n    article_id: article.id,\n    title: article.title,\n    current_seo_score: seoScore.total,\n    recommendations: recommendations,\n    analysis_date: new Date().toISOString(),\n    metrics: seoScore.breakdown\n  });\n}\n\nfunction calculateSEOScore(article) {\n  let score = 0;\n  const breakdown = {};\n  \n  // Title optimization (25 points)\n  const titleLength = article.title?.length || 0;\n  if (titleLength >= 30 && titleLength <= 60) {\n    score += 25;\n    breakdown.title = 25;\n  } else if (titleLength >= 20 && titleLength <= 70) {\n    score += 15;\n    breakdown.title = 15;\n  } else {\n    breakdown.title = 0;\n  }\n  \n  // Meta description (20 points)\n  const metaLength = article.meta_description?.length || 0;\n  if (metaLength >= 120 && metaLength <= 160) {\n    score += 20;\n    breakdown.meta_description = 20;\n  } else if (metaLength >= 100 && metaLength <= 180) {\n    score += 10;\n    breakdown.meta_description = 10;\n  } else {\n    breakdown.meta_description = 0;\n  }\n  \n  // Content length (20 points)\n  const contentLength = article.content?.length || 0;\n  if (contentLength >= 2000) {\n    score += 20;\n    breakdown.content_length = 20;\n  } else if (contentLength >= 1000) {\n    score += 15;\n    breakdown.content_length = 15;\n  } else if (contentLength >= 500) {\n    score += 10;\n    breakdown.content_length = 10;\n  } else {\n    breakdown.content_length = 0;\n  }\n  \n  // Headings structure (15 points)\n  const hasH1 = article.content?.includes(\"# \") || false;\n  const hasH2 = article.content?.includes(\"## \") || false;\n  const hasH3 = article.content?.includes(\"### \") || false;\n  \n  if (hasH1 && hasH2 && hasH3) {\n    score += 15;\n    breakdown.headings = 15;\n  } else if (hasH1 && hasH2) {\n    score += 10;\n    breakdown.headings = 10;\n  } else if (hasH1) {\n    score += 5;\n    breakdown.headings = 5;\n  } else {\n    breakdown.headings = 0;\n  }\n  \n  // Images and alt text (10 points)\n  const imageCount = article.images?.length || 0;\n  if (imageCount >= 3) {\n    score += 10;\n    breakdown.images = 10;\n  } else if (imageCount >= 1) {\n    score += 5;\n    breakdown.images = 5;\n  } else {\n    breakdown.images = 0;\n  }\n  \n  // Internal links (10 points)\n  const internalLinks = (article.content?.match(/\\[.*?\\]\\(\\//g) || []).length;\n  if (internalLinks >= 3) {\n    score += 10;\n    breakdown.internal_links = 10;\n  } else if (internalLinks >= 1) {\n    score += 5;\n    breakdown.internal_links = 5;\n  } else {\n    breakdown.internal_links = 0;\n  }\n  \n  return {\n    total: Math.min(100, score),\n    breakdown: breakdown\n  };\n}\n\nfunction generateRecommendations(article, seoScore) {\n  const recommendations = [];\n  \n  if (seoScore.breakdown.title < 15) {\n    recommendations.push({\n      type: \"title\",\n      priority: \"high\",\n      message: \"Optimize title length (30-60 characters recommended)\",\n      current_length: article.title?.length || 0\n    });\n  }\n  \n  if (seoScore.breakdown.meta_description < 10) {\n    recommendations.push({\n      type: \"meta_description\",\n      priority: \"high\",\n      message: \"Add or optimize meta description (120-160 characters)\",\n      current_length: article.meta_description?.length || 0\n    });\n  }\n  \n  if (seoScore.breakdown.content_length < 15) {\n    recommendations.push({\n      type: \"content_length\",\n      priority: \"medium\",\n      message: \"Increase content length (2000+ words recommended)\",\n      current_length: article.content?.length || 0\n    });\n  }\n  \n  if (seoScore.breakdown.headings < 10) {\n    recommendations.push({\n      type: \"headings\",\n      priority: \"medium\",\n      message: \"Improve heading structure (use H1, H2, H3 hierarchy)\"\n    });\n  }\n  \n  if (seoScore.breakdown.images < 5) {\n    recommendations.push({\n      type: \"images\",\n      priority: \"low\",\n      message: \"Add more images with descriptive alt text (3+ recommended)\"\n    });\n  }\n  \n  if (seoScore.breakdown.internal_links < 5) {\n    recommendations.push({\n      type: \"internal_links\",\n      priority: \"medium\",\n      message: \"Add more internal links to related content (3+ recommended)\"\n    });\n  }\n  \n  return recommendations;\n}\n\nreturn { analysis_results: results };"
+      }
+    },
+    {
+      "id": "save-seo-results",
+      "name": "Save SEO Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [700, 300],
+      "parameters": {
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/rpc/save_seo_analysis_results",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env.SUPABASE_SERVICE_ROLE_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "p_analysis_results",
+              "value": "={{JSON.stringify($json.analysis_results)}}"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "SEO Analysis Schedule": {
+      "main": [
+        [
+          {
+            "node": "Get Articles for Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Articles for Analysis": {
+      "main": [
+        [
+          {
+            "node": "Analyze SEO Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze SEO Metrics": {
+      "main": [
+        [
+          {
+            "node": "Save SEO Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

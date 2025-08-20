@@ -1,0 +1,162 @@
+{
+  "name": "Real-time Analytics Processing",
+  "nodes": [
+    {
+      "id": "webhook-analytics",
+      "name": "Analytics Event Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [100, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "analytics-event",
+        "responseMode": "responseNode"
+      }
+    },
+    {
+      "id": "validate-event",
+      "name": "Validate Event Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [300, 300],
+      "parameters": {
+        "functionCode": "// Validate analytics event\nconst requiredFields = [\"event_type\", \"user_id\", \"timestamp\"];\nconst validEventTypes = [\"page_view\", \"article_read\", \"search\", \"click\", \"conversion\", \"signup\", \"subscription\"];\n\nconst event = items[0].json;\n\n// Check required fields\nfor (const field of requiredFields) {\n  if (!event[field]) {\n    throw new Error(`Missing required field: ${field}`);\n  }\n}\n\n// Validate event type\nif (!validEventTypes.includes(event.event_type)) {\n  throw new Error(`Invalid event type: ${event.event_type}`);\n}\n\n// Enhance event with metadata\nconst enhancedEvent = {\n  ...event,\n  processed_at: new Date().toISOString(),\n  session_id: event.session_id || `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,\n  ip_address: event.ip_address || \"unknown\",\n  user_agent: event.user_agent || \"unknown\",\n  referrer: event.referrer || null,\n  utm_source: event.utm_source || null,\n  utm_medium: event.utm_medium || null,\n  utm_campaign: event.utm_campaign || null\n};\n\nreturn enhancedEvent;"
+      }
+    },
+    {
+      "id": "process-event",
+      "name": "Process Analytics Event",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [500, 300],
+      "parameters": {
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/rpc/process_analytics_event",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env.SUPABASE_SERVICE_ROLE_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "p_event_data",
+              "value": "={{JSON.stringify($json)}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "update-realtime-metrics",
+      "name": "Update Real-time Metrics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [700, 300],
+      "parameters": {
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/rpc/update_realtime_metrics",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env.SUPABASE_SERVICE_ROLE_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "p_event_type",
+              "value": "={{$node[\"Validate Event Data\"].json.event_type}}"
+            },
+            {
+              "name": "p_user_id",
+              "value": "={{$node[\"Validate Event Data\"].json.user_id}}"
+            },
+            {
+              "name": "p_metadata",
+              "value": "={{JSON.stringify($node[\"Validate Event Data\"].json)}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respond-success",
+      "name": "Send Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [900, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  success: true,\n  event_id: $json.event_id,\n  processed_at: $node[\"Validate Event Data\"].json.processed_at,\n  metrics_updated: true\n}) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Analytics Event Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Event Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Event Data": {
+      "main": [
+        [
+          {
+            "node": "Process Analytics Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Analytics Event": {
+      "main": [
+        [
+          {
+            "node": "Update Real-time Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Real-time Metrics": {
+      "main": [
+        [
+          {
+            "node": "Send Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

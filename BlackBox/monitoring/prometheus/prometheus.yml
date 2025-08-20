@@ -1,0 +1,32 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'gateway'
+    static_configs:
+      - targets: ['gateway:8000']
+
+  - job_name: 'content-service'
+    static_configs:
+      - targets: ['content-service:3001']
+
+  - job_name: 'seo-service'
+    static_configs:
+      - targets: ['seo-service:3002']
+
+  - job_name: 'monetization-service'
+    static_configs:
+      - targets: ['monetization-service:3003']
+
+  - job_name: 'analytics-service'
+    static_configs:
+      - targets: ['analytics-service:3004']

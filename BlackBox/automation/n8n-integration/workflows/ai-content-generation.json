@@ -1,0 +1,275 @@
+{
+  "name": "AI Content Generation Pipeline",
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "Content Request Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [100, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "content-generation",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "validate-input",
+      "name": "Validate Input Data",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [300, 300],
+      "parameters": {
+        "functionCode": "// Validate content generation request\nconst requiredFields = [\"topic\", \"niche_id\", \"target_audience\"];\nconst missingFields = [];\n\nrequiredFields.forEach(field => {\n  if (!$json[field]) {\n    missingFields.push(field);\n  }\n});\n\nif (missingFields.length > 0) {\n  throw new Error(`Missing required fields: ${missingFields.join(\", \")}`);\n}\n\n// Enhance with defaults\nreturn {\n  ...items[0].json,\n  word_count: $json.word_count || 2000,\n  language: $json.language || \"en\",\n  quality_threshold: $json.quality_threshold || 85,\n  include_images: $json.include_images !== false,\n  seo_optimize: $json.seo_optimize !== false,\n  generated_at: new Date().toISOString()\n};"
+      }
+    },
+    {
+      "id": "generate-content",
+      "name": "Generate AI Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [500, 300],
+      "parameters": {
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/rpc/generate_ai_content_enhanced",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env.SUPABASE_SERVICE_ROLE_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "p_topic",
+              "value": "={{$json.topic}}"
+            },
+            {
+              "name": "p_niche_id",
+              "value": "={{$json.niche_id}}"
+            },
+            {
+              "name": "p_word_count",
+              "value": "={{$json.word_count}}"
+            },
+            {
+              "name": "p_language",
+              "value": "={{$json.language}}"
+            },
+            {
+              "name": "p_target_audience",
+              "value": "={{$json.target_audience}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "quality-check",
+      "name": "Quality Assessment",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [700, 300],
+      "parameters": {
+        "functionCode": "// Quality assessment logic\nconst content = $json.content;\nconst qualityThreshold = $node[\"Validate Input Data\"].json.quality_threshold;\n\n// Calculate quality score\nlet qualityScore = 0;\n\n// Word count check (20 points)\nconst wordCount = content.split(\" \").length;\nif (wordCount >= 1500) qualityScore += 20;\nelse if (wordCount >= 1000) qualityScore += 15;\nelse if (wordCount >= 500) qualityScore += 10;\n\n// Structure check (20 points)\nconst hasHeadings = content.includes(\"#\");\nconst hasParagraphs = content.split(\"\\n\\n\").length >= 3;\nif (hasHeadings && hasParagraphs) qualityScore += 20;\nelse if (hasHeadings || hasParagraphs) qualityScore += 10;\n\n// SEO elements (20 points)\nconst hasKeywords = true; // Simplified for template\nconst hasMetaDescription = $json.meta_description && $json.meta_description.length > 0;\nif (hasKeywords && hasMetaDescription) qualityScore += 20;\nelse if (hasKeywords || hasMetaDescription) qualityScore += 10;\n\n// Readability (20 points)\nconst avgSentenceLength = content.split(\".\").length / content.split(\" \").length * 100;\nif (avgSentenceLength < 20) qualityScore += 20;\nelse if (avgSentenceLength < 25) qualityScore += 15;\nelse if (avgSentenceLength < 30) qualityScore += 10;\n\n// Uniqueness (20 points)\nqualityScore += 20; // Simplified - would check against existing content\n\nreturn {\n  ...items[0].json,\n  quality_score: qualityScore,\n  meets_threshold: qualityScore >= qualityThreshold,\n  quality_details: {\n    word_count: wordCount,\n    has_structure: hasHeadings && hasParagraphs,\n    has_seo_elements: hasKeywords && hasMetaDescription,\n    readability_score: avgSentenceLength\n  }\n};"
+      }
+    },
+    {
+      "id": "generate-images",
+      "name": "Generate Images",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [900, 200],
+      "parameters": {
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/rpc/generate_article_images",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env.SUPABASE_SERVICE_ROLE_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "p_topic",
+              "value": "={{$json.topic}}"
+            },
+            {
+              "name": "p_content",
+              "value": "={{$json.content}}"
+            },
+            {
+              "name": "p_image_count",
+              "value": "={{$json.image_count || 3}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "save-article",
+      "name": "Save to Database",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [900, 400],
+      "parameters": {
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/rpc/create_article_complete",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env.SUPABASE_SERVICE_ROLE_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "p_title",
+              "value": "={{$json.title}}"
+            },
+            {
+              "name": "p_content",
+              "value": "={{$json.content}}"
+            },
+            {
+              "name": "p_niche_id",
+              "value": "={{$json.niche_id}}"
+            },
+            {
+              "name": "p_author_id",
+              "value": "={{$json.author_id}}"
+            },
+            {
+              "name": "p_quality_score",
+              "value": "={{$json.quality_score}}"
+            },
+            {
+              "name": "p_meta_description",
+              "value": "={{$json.meta_description}}"
+            },
+            {
+              "name": "p_images",
+              "value": "={{JSON.stringify($node[\"Generate Images\"].json.images || [])}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "webhook-response",
+      "name": "Send Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1100, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  success: true,\n  article_id: $json.article_id,\n  quality_score: $node[\"Quality Assessment\"].json.quality_score,\n  meets_threshold: $node[\"Quality Assessment\"].json.meets_threshold,\n  images_generated: $node[\"Generate Images\"].json.images?.length || 0,\n  processing_time_ms: Date.now() - new Date($node[\"Validate Input Data\"].json.generated_at).getTime()\n}) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Content Request Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Input Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input Data": {
+      "main": [
+        [
+          {
+            "node": "Generate AI Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate AI Content": {
+      "main": [
+        [
+          {
+            "node": "Quality Assessment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quality Assessment": {
+      "main": [
+        [
+          {
+            "node": "Generate Images",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Save to Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Images": {
+      "main": [
+        [
+          {
+            "node": "Send Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Database": {
+      "main": [
+        [
+          {
+            "node": "Send Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

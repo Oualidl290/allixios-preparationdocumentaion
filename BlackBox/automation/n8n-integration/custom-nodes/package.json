@@ -1,0 +1,30 @@
+{
+  "name": "allixios-n8n-custom-nodes",
+  "version": "1.0.0",
+  "description": "Custom n8n nodes for Allixios Enterprise Platform",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "keywords": ["n8n", "nodes", "allixios", "workflow"],
+  "author": "Allixios Team",
+  "license": "MIT",
+  "dependencies": {
+    "n8n-workflow": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "typescript": "^4.9.0"
+  },
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [],
+    "nodes": [
+      "dist/AllixiosContentGenerator.node.js",
+      "dist/AllixiosSeoAnalyzer.node.js",
+      "dist/AllixiosAnalyticsProcessor.node.js",
+      "dist/AllixiosWorkflowMonitor.node.js"
+    ]
+  }
+}

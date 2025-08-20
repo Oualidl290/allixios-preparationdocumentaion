@@ -1,0 +1,361 @@
+{
+  "name": "Ultimate Lead Coordinator",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "heartbeat-trigger",
+      "name": "Coordinator Heartbeat",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// CRITICAL ENVIRONMENT VALIDATION\nconst requiredEnvVars = [\n  'SUPABASE_URL',\n  'SUPABASE_SERVICE_ROLE_KEY', \n  'GEMINI_API_KEY',\n  'MAX_CONCURRENT_WORKFLOWS',\n  'DAILY_BUDGET_USD'\n];\n\nconst missingVars = [];\nconst configErrors = [];\n\n// Check each required variable\nrequiredEnvVars.forEach(varName => {\n  if (!$env[varName]) {\n    missingVars.push(varName);\n  }\n});\n\n// Validate configuration values\nconst maxConcurrent = parseInt($env.MAX_CONCURRENT_WORKFLOWS || '3');\nif (isNaN(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 10) {\n  configErrors.push('MAX_CONCURRENT_WORKFLOWS must be between 1 and 10');\n}\n\nconst dailyBudget = parseFloat($env.DAILY_BUDGET_USD || '500');\nif (isNaN(dailyBudget) || dailyBudget < 0) {\n  configErrors.push('DAILY_BUDGET_USD must be a positive number');\n}\n\n// Generate execution context\nconst executionContext = {\n  execution_id: 'coord-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),\n  worker_id: 'lead-coordinator-' + (process.env.N8N_INSTANCE_ID || 'default'),\n  start_time: new Date().toISOString(),\n  environment: {\n    max_concurrent: maxConcurrent,\n    daily_budget: dailyBudget,\n    instance_id: process.env.N8N_INSTANCE_ID || 'default',\n    deployment_env: process.env.NODE_ENV || 'production'\n  },\n  validation: {\n    is_valid: missingVars.length === 0 && configErrors.length === 0,\n    missing_vars: missingVars,\n    config_errors: configErrors\n  }\n};\n\nif (!executionContext.validation.is_valid) {\n  throw new Error('Environment validation failed: ' +\n    [...missingVars.map(v => 'Missing: ' + v), ...configErrors].join(', '));\n}\n\nreturn executionContext;"
+      },
+      "id": "validate-environment",
+      "name": "Validate Environment",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/rpc/check_system_health_comprehensive",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env.SUPABASE_SERVICE_ROLE_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "{}"
+      },
+      "id": "system-health-check",
+      "name": "Check System Health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/rpc/get_intelligent_scheduled_tasks",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env.SUPABASE_SERVICE_ROLE_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={\n  \"p_current_time\": \"{{new Date().toISOString()}}\",\n  \"p_max_concurrent\": {{$node['Validate Environment'].json.environment.max_concurrent}}\n}"
+      },
+      "id": "load-execution-context",
+      "name": "Load Execution Context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// COMPREHENSIVE QUEUE ANALYSIS\nconst healthData = $node['Check System Health'].json;\nconst contextData = $node['Load Execution Context'].json;\n\n// Analyze queue depth by workflow type\nconst queueAnalysis = {\n  content_pipeline: {\n    pending_topics: contextData.tasks?.filter(t => t.workflow_type === 'content_pipeline')[0]?.pending_items || 0,\n    processing_rate: 5,\n    backlog_status: 'normal'\n  },\n  seo_monitor: {\n    articles_pending_analysis: contextData.tasks?.filter(t => t.workflow_type === 'seo_monitor')[0]?.pending_items || 0,\n    requires_immediate_attention: false\n  },\n  revenue_optimizer: {\n    conversions_to_analyze: contextData.tasks?.filter(t => t.workflow_type === 'revenue_optimizer')[0]?.pending_items || 0,\n    revenue_at_risk: 0\n  },\n  intelligence_engine: {\n    data_points_pending: contextData.tasks?.filter(t => t.workflow_type === 'intelligence_engine')[0]?.pending_items || 0,\n    reports_overdue: 0\n  }\n};\n\n// Calculate total system load\nconst systemLoad = {\n  total_pending_items: Object.values(queueAnalysis).reduce((sum, workflow) => {\n    return sum + (workflow.pending_topics || workflow.articles_pending_analysis || \n                  workflow.conversions_to_analyze || workflow.data_points_pending || 0);\n  }, 0),\n  active_executions: healthData.metrics?.active_executions || 0,\n  load_level: 'normal'\n};\n\n// Determine load level\nif (systemLoad.total_pending_items > 100) {\n  systemLoad.load_level = 'high';\n} else if (systemLoad.total_pending_items > 50) {\n  systemLoad.load_level = 'medium';\n}\n\nreturn {\n  queue_analysis: queueAnalysis,\n  system_load: systemLoad,\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "get-queue-status",
+      "name": "Get Queue Status",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/rpc/check_comprehensive_resource_availability",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env.SUPABASE_SERVICE_ROLE_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={\"tasks\": []}"
+      },
+      "id": "check-resource-availability",
+      "name": "Check Resource Availability",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// INTELLIGENT SCHEDULING ALGORITHM\nconst queueStatus = $node['Get Queue Status'].json;\nconst resourceStatus = $node['Check Resource Availability'].json;\nconst currentTime = new Date();\n\n// Time-based factors\nconst hour = currentTime.getHours();\nconst isBusinessHours = hour >= 9 && hour <= 17;\nconst isPeakHours = hour >= 10 && hour <= 16;\n\n// Workflow scheduling with priority calculation\nconst workflowSchedule = {\n  content_pipeline: {\n    priority: 50,\n    should_run: false,\n    batch_size: 5,\n    reasoning: [],\n    estimated_cost: 0.75\n  },\n  seo_monitor: {\n    priority: 40,\n    should_run: false,\n    batch_size: 20,\n    reasoning: [],\n    estimated_cost: 0.05\n  },\n  revenue_optimizer: {\n    priority: 30,\n    should_run: false,\n    batch_size: 50,\n    reasoning: [],\n    estimated_cost: 0.10\n  },\n  intelligence_engine: {\n    priority: 20,\n    should_run: false,\n    batch_size: 1,\n    reasoning: [],\n    estimated_cost: 0.25\n  }\n};\n\n// Calculate priorities based on queue status\nObject.keys(workflowSchedule).forEach(workflow => {\n  const schedule = workflowSchedule[workflow];\n  const queueData = queueStatus.queue_analysis[workflow];\n  \n  let priority = schedule.priority;\n  \n  // Adjust priority based on queue status\n  if (workflow === 'content_pipeline' && queueData.pending_topics > 20) {\n    priority += 30;\n    schedule.reasoning.push('High topic backlog');\n  }\n  \n  if (workflow === 'seo_monitor' && queueData.requires_immediate_attention) {\n    priority += 40;\n    schedule.reasoning.push('SEO attention required');\n  }\n  \n  if (isPeakHours) {\n    priority += 10;\n    schedule.reasoning.push('Peak business hours');\n  }\n  \n  schedule.priority = Math.min(100, priority);\n  schedule.should_run = priority >= 60;\n});\n\n// Select workflows to execute\nconst workflowsToRun = Object.entries(workflowSchedule)\n  .filter(([_, schedule]) => schedule.should_run)\n  .sort((a, b) => b[1].priority - a[1].priority)\n  .slice(0, 3)\n  .map(([workflow, schedule]) => ({\n    workflow_type: workflow,\n    priority: schedule.priority,\n    batch_size: schedule.batch_size,\n    estimated_cost: schedule.estimated_cost,\n    reasoning: schedule.reasoning\n  }));\n\nreturn {\n  scheduling_decision: {\n    workflows_to_execute: workflowsToRun,\n    total_workflows: workflowsToRun.length,\n    total_estimated_cost: workflowsToRun.reduce((sum, w) => sum + w.estimated_cost, 0),\n    execution_strategy: workflowsToRun.length > 1 ? 'parallel' : 'single'\n  },\n  timestamp: currentTime.toISOString()\n};"
+      },
+      "id": "intelligent-scheduler",
+      "name": "Intelligent Scheduler",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1300, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.scheduling_decision.workflows_to_execute.length }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "workflow-router",
+      "name": "Workflow Router",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1500, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// WORKFLOW EXECUTION DISPATCHER\nconst schedulingData = $node['Intelligent Scheduler'].json;\nconst workflowsToExecute = schedulingData.scheduling_decision.workflows_to_execute;\n\nconst executionResults = [];\n\nfor (const workflow of workflowsToExecute) {\n  const executionPayload = {\n    workflow_type: workflow.workflow_type,\n    batch_size: workflow.batch_size,\n    priority: workflow.priority,\n    execution_context: {\n      coordinator_execution_id: $node['Validate Environment'].json.execution_id,\n      estimated_cost: workflow.estimated_cost,\n      reasoning: workflow.reasoning\n    },\n    timestamp: new Date().toISOString()\n  };\n  \n  executionResults.push({\n    workflow_type: workflow.workflow_type,\n    payload: executionPayload,\n    webhook_url: getWorkflowWebhookUrl(workflow.workflow_type),\n    status: 'ready_for_dispatch'\n  });\n}\n\nfunction getWorkflowWebhookUrl(workflowType) {\n  const baseUrl = process.env.N8N_WEBHOOK_BASE_URL || 'https://your-n8n-instance.com';\n  \n  switch (workflowType) {\n    case 'content_pipeline':\n      return `${baseUrl}/webhook/content-pipeline-trigger`;\n    case 'seo_monitor':\n      return `${baseUrl}/webhook/seo-monitor-trigger`;\n    case 'revenue_optimizer':\n      return `${baseUrl}/webhook/revenue-optimizer-trigger`;\n    case 'intelligence_engine':\n      return `${baseUrl}/webhook/intelligence-engine-trigger`;\n    default:\n      throw new Error(`Unknown workflow type: ${workflowType}`);\n  }\n}\n\nreturn executionResults;"
+      },
+      "id": "workflow-dispatcher",
+      "name": "Workflow Dispatcher",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1700, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.webhook_url }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify($json.payload) }}"
+      },
+      "id": "trigger-workflows",
+      "name": "Trigger Workflows",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1900, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "// EXECUTION MONITORING\nconst dispatchResults = $input.all();\nconst schedulingData = $node['Intelligent Scheduler'].json;\nconst executionContext = $node['Validate Environment'].json;\n\nconst executionSummary = {\n  coordinator_execution_id: executionContext.execution_id,\n  start_time: executionContext.start_time,\n  end_time: new Date().toISOString(),\n  total_workflows_dispatched: dispatchResults.length,\n  successful_dispatches: dispatchResults.filter(r => r.json && !r.json.error).length,\n  failed_dispatches: dispatchResults.filter(r => r.json && r.json.error).length,\n  total_estimated_cost: schedulingData.scheduling_decision.total_estimated_cost,\n  execution_strategy: schedulingData.scheduling_decision.execution_strategy,\n  system_health_status: 'healthy'\n};\n\n// Calculate execution duration\nconst startTime = new Date(executionContext.start_time);\nconst endTime = new Date();\nexecutionSummary.execution_duration_ms = endTime.getTime() - startTime.getTime();\n\nreturn executionSummary;"
+      },
+      "id": "execution-monitor",
+      "name": "Execution Monitor",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [2100, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/rpc/record_orchestration_metrics",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env.SUPABASE_SERVICE_ROLE_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={\n  \"p_execution_data\": {{ JSON.stringify($json) }}\n}"
+      },
+      "id": "record-execution",
+      "name": "Record Execution",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [2300, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "// IDLE STATE HANDLER\nconst schedulingData = $node['Intelligent Scheduler'].json;\nconst executionContext = $node['Validate Environment'].json;\n\nconst idleReport = {\n  coordinator_execution_id: executionContext.execution_id,\n  status: 'idle',\n  reason: 'No workflows met execution criteria',\n  start_time: executionContext.start_time,\n  end_time: new Date().toISOString(),\n  next_recommended_check: new Date(Date.now() + 5 * 60 * 1000).toISOString(),\n  system_status: 'healthy_idle'\n};\n\nidleReport.execution_duration_ms = new Date().getTime() - new Date(executionContext.start_time).getTime();\n\nreturn idleReport;"
+      },
+      "id": "idle-handler",
+      "name": "Idle Handler",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1700, 400]
+    }
+  ],
+  "connections": {
+    "Coordinator Heartbeat": {
+      "main": [
+        [
+          {
+            "node": "Validate Environment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Environment": {
+      "main": [
+        [
+          {
+            "node": "Check System Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check System Health": {
+      "main": [
+        [
+          {
+            "node": "Load Execution Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Execution Context": {
+      "main": [
+        [
+          {
+            "node": "Get Queue Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Queue Status": {
+      "main": [
+        [
+          {
+            "node": "Check Resource Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Resource Availability": {
+      "main": [
+        [
+          {
+            "node": "Intelligent Scheduler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Intelligent Scheduler": {
+      "main": [
+        [
+          {
+            "node": "Workflow Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Workflow Router": {
+      "main": [
+        [
+          {
+            "node": "Workflow Dispatcher",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Idle Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Workflow Dispatcher": {
+      "main": [
+        [
+          {
+            "node": "Trigger Workflows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Workflows": {
+      "main": [
+        [
+          {
+            "node": "Execution Monitor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execution Monitor": {
+      "main": [
+        [
+          {
+            "node": "Record Execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
