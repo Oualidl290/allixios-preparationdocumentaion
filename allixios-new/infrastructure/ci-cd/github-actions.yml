@@ -1,0 +1,537 @@
+# ============================================================================
+# GITHUB ACTIONS CI/CD PIPELINE
+# Automated build, test, and deployment for Allixios platform
+# ============================================================================
+
+name: Allixios CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop, staging]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - development
+        - staging
+        - production
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  NODE_VERSION: '18'
+  TERRAFORM_VERSION: '1.6.0'
+  KUBECTL_VERSION: '1.28.0'
+
+jobs:
+  # ============================================================================
+  # CODE QUALITY & SECURITY
+  # ============================================================================
+  
+  code-quality:
+    name: Code Quality & Security
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Run ESLint
+      run: npm run lint
+
+    - name: Run Prettier
+      run: npm run format:check
+
+    - name: Run TypeScript check
+      run: npm run type-check
+
+    - name: Run security audit
+      run: npm audit --audit-level=high
+
+    - name: Run CodeQL Analysis
+      uses: github/codeql-action/init@v3
+      with:
+        languages: javascript, typescript
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+
+    - name: Run Snyk Security Scan
+      uses: snyk/actions/node@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --severity-threshold=high
+
+  # ============================================================================
+  # UNIT & INTEGRATION TESTS
+  # ============================================================================
+  
+  test:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+    needs: code-quality
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: allixios_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+      mongodb:
+        image: mongo:7.0
+        env:
+          MONGO_INITDB_ROOT_USERNAME: admin
+          MONGO_INITDB_ROOT_PASSWORD: test_password
+        options: >-
+          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 27017:27017
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Run database migrations
+      run: npm run migrate:test
+      env:
+        DATABASE_URL: postgresql://postgres:test_password@localhost:5432/allixios_test
+        MONGODB_URL: mongodb://admin:test_password@localhost:27017/allixios_test?authSource=admin
+        REDIS_URL: redis://localhost:6379
+
+    - name: Run unit tests
+      run: npm run test:unit
+      env:
+        NODE_ENV: test
+        DATABASE_URL: postgresql://postgres:test_password@localhost:5432/allixios_test
+        MONGODB_URL: mongodb://admin:test_password@localhost:27017/allixios_test?authSource=admin
+        REDIS_URL: redis://localhost:6379
+
+    - name: Run integration tests
+      run: npm run test:integration
+      env:
+        NODE_ENV: test
+        DATABASE_URL: postgresql://postgres:test_password@localhost:5432/allixios_test
+        MONGODB_URL: mongodb://admin:test_password@localhost:27017/allixios_test?authSource=admin
+        REDIS_URL: redis://localhost:6379
+
+    - name: Generate test coverage
+      run: npm run test:coverage
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        files: ./coverage/lcov.info
+        fail_ci_if_error: true
+
+  # ============================================================================
+  # BUILD DOCKER IMAGES
+  # ============================================================================
+  
+  build:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: [code-quality, test]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    
+    strategy:
+      matrix:
+        service:
+          - api-gateway
+          - content-service
+          - seo-service
+          - analytics-service
+          - user-service
+          - translation-service
+          - notification-service
+          - public-website
+          - admin-dashboard
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.service }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./services/${{ matrix.service }}
+        file: ./services/${{ matrix.service }}/Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
+
+  # ============================================================================
+  # INFRASTRUCTURE DEPLOYMENT
+  # ============================================================================
+  
+  infrastructure:
+    name: Deploy Infrastructure
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    
+    environment: 
+      name: ${{ github.event.inputs.environment || 'production' }}
+      url: https://allixios.com
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+    - name: Terraform Init
+      working-directory: ./infrastructure/terraform
+      run: terraform init
+
+    - name: Terraform Plan
+      working-directory: ./infrastructure/terraform
+      run: terraform plan -var-file="${{ github.event.inputs.environment || 'production' }}.tfvars"
+      env:
+        TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+        TF_VAR_redis_auth_token: ${{ secrets.REDIS_AUTH_TOKEN }}
+        TF_VAR_jwt_secret: ${{ secrets.JWT_SECRET }}
+        TF_VAR_encryption_key: ${{ secrets.ENCRYPTION_KEY }}
+        TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+        TF_VAR_google_ai_api_key: ${{ secrets.GOOGLE_AI_API_KEY }}
+        TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+        TF_VAR_smtp_password: ${{ secrets.SMTP_PASSWORD }}
+        TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+    - name: Terraform Apply
+      working-directory: ./infrastructure/terraform
+      run: terraform apply -auto-approve -var-file="${{ github.event.inputs.environment || 'production' }}.tfvars"
+      env:
+        TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+        TF_VAR_redis_auth_token: ${{ secrets.REDIS_AUTH_TOKEN }}
+        TF_VAR_jwt_secret: ${{ secrets.JWT_SECRET }}
+        TF_VAR_encryption_key: ${{ secrets.ENCRYPTION_KEY }}
+        TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+        TF_VAR_google_ai_api_key: ${{ secrets.GOOGLE_AI_API_KEY }}
+        TF_VAR_anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+        TF_VAR_smtp_password: ${{ secrets.SMTP_PASSWORD }}
+        TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+  # ============================================================================
+  # KUBERNETES DEPLOYMENT
+  # ============================================================================
+  
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    needs: infrastructure
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    
+    environment: 
+      name: ${{ github.event.inputs.environment || 'production' }}
+      url: https://allixios.com
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: ${{ env.KUBECTL_VERSION }}
+
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig --region ${{ vars.AWS_REGION || 'us-east-1' }} --name allixios-${{ github.event.inputs.environment || 'production' }}
+
+    - name: Deploy to Kubernetes
+      run: |
+        # Apply namespace
+        kubectl apply -f infrastructure/kubernetes/namespace.yaml
+        
+        # Apply secrets (from environment variables)
+        kubectl create secret generic allixios-secrets \
+          --from-literal=POSTGRES_PASSWORD="${{ secrets.DB_PASSWORD }}" \
+          --from-literal=REDIS_PASSWORD="${{ secrets.REDIS_AUTH_TOKEN }}" \
+          --from-literal=JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+          --from-literal=OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+          --from-literal=GOOGLE_AI_API_KEY="${{ secrets.GOOGLE_AI_API_KEY }}" \
+          --from-literal=ANTHROPIC_API_KEY="${{ secrets.ANTHROPIC_API_KEY }}" \
+          --from-literal=SMTP_PASSWORD="${{ secrets.SMTP_PASSWORD }}" \
+          --namespace=allixios \
+          --dry-run=client -o yaml | kubectl apply -f -
+        
+        # Apply ConfigMaps
+        kubectl apply -f infrastructure/kubernetes/configmap.yaml
+        
+        # Apply deployments
+        kubectl apply -f infrastructure/kubernetes/deployments/
+        
+        # Wait for rollout
+        kubectl rollout status deployment/api-gateway -n allixios --timeout=600s
+        kubectl rollout status deployment/content-service -n allixios --timeout=600s
+
+    - name: Verify deployment
+      run: |
+        kubectl get pods -n allixios
+        kubectl get services -n allixios
+        kubectl get ingress -n allixios
+
+  # ============================================================================
+  # DATABASE MIGRATIONS
+  # ============================================================================
+  
+  migrate:
+    name: Run Database Migrations
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+    - name: Get RDS endpoint
+      id: rds
+      run: |
+        ENDPOINT=$(aws rds describe-db-instances --db-instance-identifier allixios-${{ github.event.inputs.environment || 'production' }}-postgres --query 'DBInstances[0].Endpoint.Address' --output text)
+        echo "endpoint=$ENDPOINT" >> $GITHUB_OUTPUT
+
+    - name: Run database migrations
+      run: npm run migrate:production
+      env:
+        DATABASE_URL: postgresql://allixios_user:${{ secrets.DB_PASSWORD }}@${{ steps.rds.outputs.endpoint }}:5432/allixios
+
+  # ============================================================================
+  # END-TO-END TESTS
+  # ============================================================================
+  
+  e2e-tests:
+    name: End-to-End Tests
+    runs-on: ubuntu-latest
+    needs: migrate
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Install Playwright
+      run: npx playwright install --with-deps
+
+    - name: Run E2E tests
+      run: npm run test:e2e
+      env:
+        BASE_URL: https://allixios.com
+        API_URL: https://api.allixios.com
+
+    - name: Upload E2E test results
+      uses: actions/upload-artifact@v3
+      if: failure()
+      with:
+        name: e2e-test-results
+        path: test-results/
+
+  # ============================================================================
+  # PERFORMANCE TESTS
+  # ============================================================================
+  
+  performance-tests:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    needs: e2e-tests
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Run performance tests
+      run: npm run test:performance
+      env:
+        BASE_URL: https://allixios.com
+
+    - name: Upload performance results
+      uses: actions/upload-artifact@v3
+      with:
+        name: performance-test-results
+        path: performance-results/
+
+  # ============================================================================
+  # SECURITY SCAN
+  # ============================================================================
+  
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run OWASP ZAP scan
+      uses: zaproxy/action-full-scan@v0.7.0
+      with:
+        target: 'https://allixios.com'
+        rules_file_name: '.zap/rules.tsv'
+        cmd_options: '-a'
+
+  # ============================================================================
+  # NOTIFICATION
+  # ============================================================================
+  
+  notify:
+    name: Notify Deployment Status
+    runs-on: ubuntu-latest
+    needs: [deploy, migrate, e2e-tests, performance-tests, security-scan]
+    if: always() && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+
+    steps:
+    - name: Notify Slack
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#deployments'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        fields: repo,message,commit,author,action,eventName,ref,workflow
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+    - name: Notify email
+      if: failure()
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.SMTP_USERNAME }}
+        password: ${{ secrets.SMTP_PASSWORD }}
+        subject: 'Allixios Deployment Failed'
+        to: ${{ vars.ALERT_EMAIL }}
+        from: 'Allixios CI/CD <noreply@allixios.com>'
+        body: |
+          Deployment to ${{ github.event.inputs.environment || 'production' }} failed.
+          
+          Commit: ${{ github.sha }}
+          Author: ${{ github.actor }}
+          Workflow: ${{ github.workflow }}
+          
+          Please check the GitHub Actions logs for more details.

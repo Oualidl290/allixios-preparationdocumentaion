@@ -1,0 +1,36 @@
+{
+  "name": "@allixios/shared",
+  "version": "1.0.0",
+  "description": "Shared utilities and libraries for Allixios microservices",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "lint": "eslint src/**/*.ts",
+    "format": "prettier --write src/**/*.ts"
+  },
+  "dependencies": {
+    "winston": "^3.11.0",
+    "zod": "^3.22.4",
+    "jsonwebtoken": "^9.0.2",
+    "bcrypt": "^5.1.1",
+    "uuid": "^9.0.1",
+    "pg": "^8.11.3",
+    "mongodb": "^6.3.0",
+    "redis": "^4.6.10",
+    "express": "^4.18.2",
+    "express-validator": "^7.0.1",
+    "prom-client": "^15.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.5",
+    "@types/bcrypt": "^5.0.2",
+    "@types/uuid": "^9.0.7",
+    "typescript": "^5.3.2",
+    "jest": "^29.7.0",
+    "eslint": "^8.54.0",
+    "prettier": "^3.1.0"
+  }
+}

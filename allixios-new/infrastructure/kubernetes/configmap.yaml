@@ -1,0 +1,211 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: allixios-config
+  namespace: allixios
+  labels:
+    app.kubernetes.io/name: allixios
+    app.kubernetes.io/component: config
+data:
+  # Application Configuration
+  NODE_ENV: "production"
+  TIMEZONE: "UTC"
+  LOG_LEVEL: "info"
+  
+  # Database URLs (non-sensitive parts)
+  POSTGRES_HOST: "postgres-service"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "allixios"
+  POSTGRES_USER: "allixios_user"
+  
+  MONGODB_HOST: "mongodb-service"
+  MONGODB_PORT: "27017"
+  MONGODB_DB: "allixios"
+  
+  REDIS_HOST: "redis-service"
+  REDIS_PORT: "6379"
+  
+  ELASTICSEARCH_HOST: "elasticsearch-service"
+  ELASTICSEARCH_PORT: "9200"
+  
+  CLICKHOUSE_HOST: "clickhouse-service"
+  CLICKHOUSE_PORT: "8123"
+  CLICKHOUSE_DB: "allixios"
+  
+  # Service URLs
+  API_GATEWAY_URL: "http://api-gateway-service:3000"
+  CONTENT_SERVICE_URL: "http://content-service:3001"
+  SEO_SERVICE_URL: "http://seo-service:3002"
+  ANALYTICS_SERVICE_URL: "http://analytics-service:3003"
+  USER_SERVICE_URL: "http://user-service:3004"
+  TRANSLATION_SERVICE_URL: "http://translation-service:3005"
+  NOTIFICATION_SERVICE_URL: "http://notification-service:3006"
+  
+  # n8n Configuration
+  N8N_HOST: "n8n-service"
+  N8N_PORT: "5678"
+  N8N_PROTOCOL: "http"
+  
+  # Monitoring URLs
+  PROMETHEUS_URL: "http://prometheus-service:9090"
+  GRAFANA_URL: "http://grafana-service:3000"
+  
+  # Feature Flags
+  ENABLE_USER_REGISTRATION: "true"
+  ENABLE_AI_CONTENT_GENERATION: "true"
+  ENABLE_AI_SEO_OPTIMIZATION: "true"
+  ENABLE_AI_TRANSLATION: "true"
+  ENABLE_A_B_TESTING: "true"
+  ENABLE_ANALYTICS_TRACKING: "true"
+  ENABLE_WORKFLOW_AUTOMATION: "true"
+  
+  # Rate Limiting
+  RATE_LIMIT_WINDOW_MS: "900000"
+  RATE_LIMIT_MAX_REQUESTS: "1000"
+  
+  # Session Configuration
+  SESSION_TIMEOUT: "86400000"
+  
+  # CORS Configuration
+  CORS_ORIGIN: "https://allixios.com,https://admin.allixios.com"
+  
+  # CDN Configuration
+  CDN_URL: "https://cdn.allixios.com"
+  MEDIA_BASE_URL: "https://media.allixios.com"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: allixios
+  labels:
+    app.kubernetes.io/name: allixios
+    app.kubernetes.io/component: nginx
+data:
+  nginx.conf: |
+    user nginx;
+    worker_processes auto;
+    error_log /var/log/nginx/error.log warn;
+    pid /var/run/nginx.pid;
+
+    events {
+        worker_connections 1024;
+        use epoll;
+        multi_accept on;
+    }
+
+    http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+
+        # Logging
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                       '$status $body_bytes_sent "$http_referer" '
+                       '"$http_user_agent" "$http_x_forwarded_for"';
+        access_log /var/log/nginx/access.log main;
+
+        # Performance
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+        keepalive_timeout 65;
+        types_hash_max_size 2048;
+        client_max_body_size 100M;
+
+        # Gzip compression
+        gzip on;
+        gzip_vary on;
+        gzip_min_length 1024;
+        gzip_proxied any;
+        gzip_comp_level 6;
+        gzip_types
+            text/plain
+            text/css
+            text/xml
+            text/javascript
+            application/json
+            application/javascript
+            application/xml+rss
+            application/atom+xml
+            image/svg+xml;
+
+        # Rate limiting
+        limit_req_zone $binary_remote_addr zone=api:10m rate=10r/s;
+        limit_req_zone $binary_remote_addr zone=login:10m rate=1r/s;
+
+        # Upstream services
+        upstream api_gateway {
+            server api-gateway-service:3000;
+            keepalive 32;
+        }
+
+        upstream public_website {
+            server public-website-service:3000;
+            keepalive 32;
+        }
+
+        upstream admin_dashboard {
+            server admin-dashboard-service:3000;
+            keepalive 32;
+        }
+
+        # Main server block
+        server {
+            listen 80;
+            server_name _;
+
+            # Security headers
+            add_header X-Frame-Options "SAMEORIGIN" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            add_header X-XSS-Protection "1; mode=block" always;
+            add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+            # API routes
+            location /api/ {
+                limit_req zone=api burst=20 nodelay;
+                proxy_pass http://api_gateway;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection 'upgrade';
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_cache_bypass $http_upgrade;
+            }
+
+            # Admin dashboard
+            location /admin/ {
+                proxy_pass http://admin_dashboard/;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection 'upgrade';
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_cache_bypass $http_upgrade;
+            }
+
+            # Public website
+            location / {
+                proxy_pass http://public_website;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection 'upgrade';
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_cache_bypass $http_upgrade;
+            }
+
+            # Health check
+            location /health {
+                access_log off;
+                return 200 "healthy\n";
+                add_header Content-Type text/plain;
+            }
+        }
+    }

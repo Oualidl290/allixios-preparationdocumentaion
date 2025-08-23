@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: allixios
+  labels:
+    name: allixios
+    environment: production
+    app.kubernetes.io/name: allixios
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: kubernetes
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: allixios-staging
+  labels:
+    name: allixios-staging
+    environment: staging
+    app.kubernetes.io/name: allixios
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: kubernetes
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: allixios-monitoring
+  labels:
+    name: allixios-monitoring
+    environment: production
+    app.kubernetes.io/name: allixios-monitoring
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: kubernetes
